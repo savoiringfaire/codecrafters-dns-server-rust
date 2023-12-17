@@ -2,26 +2,42 @@ use std::net::UdpSocket;
 use anyhow::Context;
 use anyhow::anyhow;
 
-struct Packet {
+#[derive(Debug, Clone)]
+struct Packet<'a> {
     /// The header section is always present.  The header includes fields that
     /// specify which of the remaining sections are present, and also specify
     /// whether the message is a query or a response, a standard query or some
     /// other opcode, etc.
-    header: Header
+    header: Header,
+
+    questions: Vec<Question<'a>>,
 }
 
-impl Packet {
+impl<'a> Packet<'a> {
     pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
         Ok(Self{
-            header: Header::from_bytes(&bytes[0..12]).context("decoding header")?
+            header: Header::from_bytes(&bytes[0..12]).context("decoding header")?,
+            questions: vec![],
         })
     }
 
-    pub fn encode(self) -> Vec<u8> {
-        self.header.encode().to_vec()
+    pub fn encode(&self) -> anyhow::Result<Vec<u8>> {
+        let header = self.header.encode().to_vec();
+
+        let mut questions: Vec<u8> = Vec::with_capacity(self.header.question_count as usize);
+
+        for question in self.questions.clone() {
+            questions.append(&mut question.encode()?)
+        }
+
+        Ok([
+            header,
+            questions
+        ].concat())
     }
 }
 
+#[derive(Debug, Clone)]
 struct Header {
     /// A 16 bit identifier assigned by the 'querier'. To be copied to replies to match up.
     id: u16,
@@ -102,7 +118,7 @@ impl Header {
         })
     }
 
-    pub fn encode(self) -> [u8; 12] {
+    pub fn encode(&self) -> [u8; 12] {
         [
             // TODO: More efficient way than calling to_be_bytes twice?
             self.id.to_be_bytes()[0],
@@ -121,6 +137,101 @@ impl Header {
     }
 }
 
+#[derive(Debug, Clone)]
+struct Question<'a> {
+    /// A domain name, represented as a sequence of "labels"
+    /// each label represents a part of the domain (e.g. 'google', 'com')
+    name: Vec<&'a str>,
+
+    /// the type of record
+    record_type: RecordType,
+
+    /// Rarely used, not implemented.
+    class: u16
+}
+
+impl<'a> Question<'a> {
+    fn encode_name(&self) -> anyhow::Result<Vec<u8>> {
+        let mut labels: Vec<u8> = Vec::new();
+
+        for name in &self.name {
+            if name.len() > u8::MAX as usize {
+                return Err(anyhow!("Name part `{}` longer than max `{}`", name, u8::MAX))
+            }
+
+            labels.append(&mut [
+                &[name.len() as u8],
+                name.as_bytes()
+            ].concat().to_vec())
+        }
+
+        labels.push(0x00);
+
+        Ok(labels)
+    }
+
+    pub fn encode(&self) -> anyhow::Result<Vec<u8>> {
+        Ok([
+            self.encode_name()?,
+            (self.record_type as u16).to_be_bytes().to_vec(),
+            self.class.to_be_bytes().to_vec()
+        ].concat().to_vec())
+    }
+}
+
+#[derive(Copy, Debug, Clone)]
+#[allow(dead_code)]
+enum RecordType {
+    /// A host address
+    A = 1,
+
+    /// An authoratitive name server
+    NS = 2,
+
+    /// A mail destination (obselete - use MX)
+    MD = 3,
+
+    /// A mail forwarder (obselete - use MX)
+    MF = 4,
+
+    /// The canonical name for an alias
+    CNAME = 5,
+
+    /// Marks the start of a zone of authority
+    SOA = 6,
+
+    /// A mailbox domain name (Experimental)
+    MB = 7,
+
+    /// A mail group member (Experimental)
+    MG = 8,
+
+    /// A mail rename domain name (Experimental)
+    MR = 9,
+
+    /// A null RR (Experimental)
+    NULL = 10,
+
+    /// A well known service description
+    WKS = 11,
+
+    /// A domain name pointer
+    PTR = 12,
+
+    /// Host information
+    HINFO = 13,
+
+    /// Mailbox or mail list information
+    MINFO = 14,
+
+    /// Mail Exchange
+    MX = 15,
+    
+    /// Text Strings
+    TXT = 16,
+}
+
+#[derive(Copy, Debug, Clone)]
 enum ResponseCode {
     /// No error condition
     Success = 0,
@@ -167,10 +278,12 @@ impl TryFrom<u8> for ResponseCode {
     }
 }
 
+#[derive(Copy, Debug, Clone)]
 enum Z {
     Always = 0
 }
 
+#[derive(Copy, Debug, Clone)]
 enum PacketType {
     Query = 0,
     Response = 1
@@ -188,6 +301,7 @@ impl TryFrom<u8> for PacketType {
     }
 }
 
+#[derive(Copy, Debug, Clone)]
 enum OperationCode {
     /// a standard query (QUERY)
     Query = 0,
@@ -234,12 +348,19 @@ fn main() -> anyhow::Result<()> {
                         recursion_available: false,
                         z: Z::Always,
                         response_code: ResponseCode::Success,
-                        question_count: 0,
+                        question_count: 1,
                         answer_count: 0,
                         name_server_count: 0,
                         additional_records_count: 0,
-                    }
-                }.encode();
+                    },
+                    questions: vec![
+                        Question{
+                            name: vec!["codecrafters", "io"],
+                            class: 1,
+                            record_type: RecordType::A,
+                        }
+                    ]
+                }.encode()?;
 
                 udp_socket
                     .send_to(&response, source)
