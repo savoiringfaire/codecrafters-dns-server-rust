@@ -11,6 +11,8 @@ struct Packet<'a> {
     header: Header,
 
     questions: Vec<Question<'a>>,
+
+    answers: Vec<Answer<'a>>
 }
 
 impl<'a> Packet<'a> {
@@ -18,6 +20,7 @@ impl<'a> Packet<'a> {
         Ok(Self{
             header: Header::from_bytes(&bytes[0..12]).context("decoding header")?,
             questions: vec![],
+            answers: vec![]
         })
     }
 
@@ -25,14 +28,19 @@ impl<'a> Packet<'a> {
         let header = self.header.encode().to_vec();
 
         let mut questions: Vec<u8> = Vec::with_capacity(self.header.question_count as usize);
-
         for question in self.questions.clone() {
-            questions.append(&mut question.encode()?)
+            questions.append(&mut question.encode()?);
+        }
+
+        let mut answers: Vec<u8> = Vec::with_capacity(self.header.answer_count as usize);
+        for answer in self.answers.clone() {
+            answers.append(&mut answer.encode()?);
         }
 
         Ok([
             header,
-            questions
+            questions,
+            answers
         ].concat())
     }
 }
@@ -138,10 +146,34 @@ impl Header {
 }
 
 #[derive(Debug, Clone)]
+struct Labels<'a>(Vec<&'a str>);
+
+impl<'a> Labels<'a> {
+    pub fn encode(&self) -> anyhow::Result<Vec<u8>> {
+        let mut labels: Vec<u8> = Vec::new();
+
+        for label in &self.0 {
+            if label.len() > u8::MAX as usize {
+                return Err(anyhow!("Name part `{}` longer than max `{}`", label, u8::MAX))
+            }
+
+            labels.append(&mut [
+                &[label.len() as u8],
+                label.as_bytes()
+            ].concat().to_vec())
+        }
+
+        labels.push(0x00);
+
+        Ok(labels)
+    }
+}
+
+#[derive(Debug, Clone)]
 struct Question<'a> {
     /// A domain name, represented as a sequence of "labels"
     /// each label represents a part of the domain (e.g. 'google', 'com')
-    name: Vec<&'a str>,
+    name: Labels<'a>,
 
     /// the type of record
     record_type: RecordType,
@@ -151,31 +183,69 @@ struct Question<'a> {
 }
 
 impl<'a> Question<'a> {
-    fn encode_name(&self) -> anyhow::Result<Vec<u8>> {
-        let mut labels: Vec<u8> = Vec::new();
-
-        for name in &self.name {
-            if name.len() > u8::MAX as usize {
-                return Err(anyhow!("Name part `{}` longer than max `{}`", name, u8::MAX))
-            }
-
-            labels.append(&mut [
-                &[name.len() as u8],
-                name.as_bytes()
-            ].concat().to_vec())
-        }
-
-        labels.push(0x00);
-
-        Ok(labels)
-    }
-
     pub fn encode(&self) -> anyhow::Result<Vec<u8>> {
         Ok([
-            self.encode_name()?,
+            self.name.encode()?,
             (self.record_type as u16).to_be_bytes().to_vec(),
             self.class.to_be_bytes().to_vec()
         ].concat().to_vec())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Answer<'a> {
+    /// a domain name to which this resource record pertains.
+    name: Labels<'a>,
+
+    /// two octets containing one of the RR type codes.  This
+    /// field specifies the meaning of the data in the RDATA
+    /// field.
+    answer_type: RecordType,
+
+    /// two octets which specify the class of the data in the RDATA field.
+    class: u16,
+
+    /// a 32 bit unsigned integer that specifies the time
+    /// interval (in seconds) that the resource record may be
+    /// cached before it should be discarded.  Zero values are
+    /// interpreted to mean that the RR can only be used for the
+    /// transaction in progress, and should not be cached.
+    ttl: u32,
+
+    /// an unsigned 16 bit integer that specifies the length in octets of the RDATA field.
+    rdlength: u16,
+
+    /// a variable length string of octets that describes the
+    /// resource.  The format of this information varies
+    /// according to the TYPE and CLASS of the resource record.
+    /// For example, the if the TYPE is A and the CLASS is IN,
+    /// the RDATA field is a 4 octet ARPA Internet address.
+    rdata: ResponseData
+}
+
+impl<'a> Answer<'a> {
+    pub fn encode(&self) -> anyhow::Result<Vec<u8>> {
+        Ok([
+            self.name.encode()?,
+            (self.answer_type as u16).to_be_bytes().to_vec(),
+            self.class.to_be_bytes().to_vec(),
+            self.ttl.to_be_bytes().to_vec(),
+            self.rdlength.to_be_bytes().to_vec(),
+            self.rdata.encode().to_vec(),
+        ].concat().to_vec())
+    }
+}
+
+#[derive(Clone, Debug)]
+enum ResponseData {
+    Ipv4([u8; 4])
+}
+
+impl ResponseData {
+    pub fn encode(&self) -> &[u8] {
+        match self {
+            Self::Ipv4(addr) => addr
+        }
     }
 }
 
@@ -349,15 +419,26 @@ fn main() -> anyhow::Result<()> {
                         z: Z::Always,
                         response_code: ResponseCode::Success,
                         question_count: 1,
-                        answer_count: 0,
+                        answer_count: 1,
                         name_server_count: 0,
                         additional_records_count: 0,
                     },
                     questions: vec![
                         Question{
-                            name: vec!["codecrafters", "io"],
+                            name: Labels(vec!["codecrafters", "io"]),
                             class: 1,
                             record_type: RecordType::A,
+                        }
+                    ],
+                    answers: vec![
+                        Answer{
+                            name: Labels(vec!["codecrafters", "io"]),
+                            answer_type: RecordType::A,
+                            class: 1,
+                            ttl: 60,
+                            // TODO: Encode properly
+                            rdlength: 4,
+                            rdata: ResponseData::Ipv4([0x08, 0x08, 0x08, 0x08])
                         }
                     ]
                 }.encode()?;
