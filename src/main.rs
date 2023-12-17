@@ -1,5 +1,6 @@
 use std::net::UdpSocket;
-use std::mem;
+use anyhow::Context;
+use anyhow::anyhow;
 
 struct Packet {
     /// The header section is always present.  The header includes fields that
@@ -10,8 +11,10 @@ struct Packet {
 }
 
 impl Packet {
-    pub fn decode(bytes: &[u8]) -> Self {
-        todo!()
+    pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
+        Ok(Self{
+            header: Header::from_bytes(&bytes[0..12]).context("decoding header")?
+        })
     }
 
     pub fn encode(self) -> Vec<u8> {
@@ -76,8 +79,27 @@ struct Header {
 }
 
 impl Header {
-    pub fn decode(bytes: [u8; 12]) -> Self {
-        todo!()
+    pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
+        if bytes.len() != 12 {
+            return Err(anyhow!("Incorrect header byte length given: {}", bytes.len()))
+        }
+
+        Ok(Self {
+            // TODO: Proper handling of endianess here
+            id: (bytes[0] as u16) << 8 | bytes[1] as u16,
+            packet_type: PacketType::try_from(bytes[2] & 0x80).context("Packet type to be valid")?,
+            opcode: OperationCode::try_from((bytes[2] & 0x78) >> 3).context("Opcode type to be valid")?,
+            authoratitive_answer: bytes[2] & 0x04 != 0,
+            truncation: bytes[2] & 0x02 != 0,
+            recursion_desired: bytes[2] & 0x01 != 0,
+            recursion_available: bytes[3] & 0x80 != 0,
+            z: Z::Always,
+            response_code: ResponseCode::try_from(bytes[3] & 0x0F).context("Response code type to be valid")?,
+            question_count: (bytes[4] as u16) << 8 | bytes[5] as u16,
+            answer_count: (bytes[6] as u16) << 8 | bytes[7] as u16,
+            name_server_count: (bytes[8] as u16) << 8 | bytes[9] as u16,
+            additional_records_count: (bytes[10] as u16) << 8 | bytes[11] as u16,
+        })
     }
 
     pub fn encode(self) -> [u8; 12] {
@@ -129,6 +151,22 @@ enum ResponseCode {
     Refused = 5
 }
 
+impl TryFrom<u8> for ResponseCode {
+    type Error = anyhow::Error;
+
+    fn try_from(from: u8) -> anyhow::Result<Self> {
+        match from {
+            0 => Ok(ResponseCode::Success),
+            1 => Ok(ResponseCode::FormatError),
+            2 => Ok(ResponseCode::ServerFailure),
+            3 => Ok(ResponseCode::NameError),
+            4 => Ok(ResponseCode::NotImplemented),
+            5 => Ok(ResponseCode::Refused),
+            _ => Err(anyhow!("Invalid response code"))
+        }
+    }
+}
+
 enum Z {
     Always = 0
 }
@@ -136,6 +174,18 @@ enum Z {
 enum PacketType {
     Query = 0,
     Response = 1
+}
+
+impl TryFrom<u8> for PacketType {
+    type Error = anyhow::Error;
+
+    fn try_from(from: u8) -> anyhow::Result<Self> {
+        match from {
+            0 => Ok(PacketType::Query),
+            1 => Ok(PacketType::Response),
+            _ => Err(anyhow!("Invalid packet type received"))
+        }
+    }
 }
 
 enum OperationCode {
@@ -147,7 +197,20 @@ enum OperationCode {
     Status = 2
 }
 
-fn main() {
+impl TryFrom<u8> for OperationCode {
+    type Error = anyhow::Error;
+
+    fn try_from(from: u8) -> anyhow::Result<Self> {
+        match from {
+            0 => Ok(OperationCode::Query),
+            1 => Ok(OperationCode::IQuery),
+            2 => Ok(OperationCode::Status),
+            _ => Err(anyhow!("Invalid operation code received"))
+        }
+    }
+}
+
+fn main() -> anyhow::Result<()> {
     // Uncomment this block to pass the first stage
     let udp_socket = UdpSocket::bind("127.0.0.1:2053").expect("Failed to bind to address");
     let mut buf = [0; 512];
@@ -156,10 +219,13 @@ fn main() {
         match udp_socket.recv_from(&mut buf) {
             Ok((size, source)) => {
                 let _received_data = String::from_utf8_lossy(&buf[0..size]);
+
+                let req = Packet::from_bytes(&buf)?;
+
                 println!("Received {} bytes from {}", size, source);
                 let response = Packet{
                     header: Header {
-                        id: 1234,
+                        id: req.header.id,
                         packet_type: PacketType::Response,
                         opcode: OperationCode::Query,
                         authoratitive_answer: false,
@@ -185,4 +251,6 @@ fn main() {
             }
         }
     }
+
+    Ok(())
 }
