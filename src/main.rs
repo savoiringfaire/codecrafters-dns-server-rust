@@ -131,7 +131,7 @@ impl Header {
             // TODO: More efficient way than calling to_be_bytes twice?
             self.id.to_be_bytes()[0],
             self.id.to_be_bytes()[1],
-            (self.packet_type as u8) << 7 | (self.opcode as u8) << 3 | (self.authoratitive_answer as u8) << 2 | (self.truncation as u8) << 1 | (self.recursion_desired as u8),
+            (self.packet_type as u8) << 7 | (u8::from(self.opcode)) << 3 | (self.authoratitive_answer as u8) << 2 | (self.truncation as u8) << 1 | (self.recursion_desired as u8),
             (self.recursion_available as u8) << 7 | 0 << 4 | (self.response_code as u8),
             self.question_count.to_be_bytes()[0],
             self.question_count.to_be_bytes()[1],
@@ -372,13 +372,28 @@ impl TryFrom<u8> for PacketType {
 }
 
 #[derive(Copy, Debug, Clone)]
+#[repr(u8)]
 enum OperationCode {
     /// a standard query (QUERY)
     Query = 0,
     /// an inverse query (IQUERY)
     IQuery = 1,
     /// a server status request (STATUS)
-    Status = 2
+    Status = 2,
+
+    /// Internal invalid representation
+    Invalid(u8)
+}
+
+impl From<OperationCode> for u8 {
+    fn from(from: OperationCode) -> u8 {
+        match from {
+            OperationCode::Invalid(code) => code,
+            OperationCode::Query => 0,
+            OperationCode::IQuery => 1,
+            OperationCode::Status => 2,
+        }
+    }
 }
 
 impl TryFrom<u8> for OperationCode {
@@ -389,7 +404,7 @@ impl TryFrom<u8> for OperationCode {
             0 => Ok(OperationCode::Query),
             1 => Ok(OperationCode::IQuery),
             2 => Ok(OperationCode::Status),
-            _ => Err(anyhow!("Invalid operation code received"))
+            _ => Ok(OperationCode::Invalid(from))
         }
     }
 }
@@ -411,13 +426,16 @@ fn main() -> anyhow::Result<()> {
                     header: Header {
                         id: req.header.id,
                         packet_type: PacketType::Response,
-                        opcode: OperationCode::Query,
+                        opcode: req.header.opcode,
                         authoratitive_answer: false,
                         truncation: false,
-                        recursion_desired: false,
+                        recursion_desired: req.header.recursion_desired,
                         recursion_available: false,
                         z: Z::Always,
-                        response_code: ResponseCode::Success,
+                        response_code: match req.header.opcode{
+                            OperationCode::Query => ResponseCode::Success,
+                            _ => ResponseCode::NotImplemented
+                        },
                         question_count: 1,
                         answer_count: 1,
                         name_server_count: 0,
