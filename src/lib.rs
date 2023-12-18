@@ -178,9 +178,12 @@ impl<'a> Labels<'a> {
             let label_len = bytes[offset] as usize;
             if label_len & 0xC0 == 0xC0 {
                 // This is a pointer
-                let pointer: usize = ((bytes[offset] as u16) & 0x3f << 8 | bytes[offset+1] as u16) as usize;
+                let pointer: usize =
+                    ((bytes[offset] as u16) & 0x3f << 8 | bytes[offset + 1] as u16) as usize;
 
-                let (_, mut pointer_labels) = Self::from_bytes(&full_message[pointer..], &full_message).context("parsing pointer")?;
+                let (_, mut pointer_labels) =
+                    Self::from_bytes(&full_message[pointer..], &full_message)
+                        .context("parsing pointer")?;
                 labels.append(&mut pointer_labels.0);
                 offset += 1;
 
@@ -189,7 +192,8 @@ impl<'a> Labels<'a> {
             } else {
                 labels.push(
                     // TODO: Proper error handling here.
-                    std::str::from_utf8(&bytes[offset + 1..offset + 1 + label_len]).context("Creating str from label")?,
+                    std::str::from_utf8(&bytes[offset + 1..offset + 1 + label_len])
+                        .context("Creating str from label")?,
                 );
                 offset += label_len + 1;
             }
@@ -234,7 +238,8 @@ pub struct Question<'a> {
 
 impl<'a> Question<'a> {
     pub fn from_bytes(bytes: &'a [u8], full_message: &'a [u8]) -> anyhow::Result<(&'a [u8], Self)> {
-        let (remaining, name) = Labels::from_bytes(&bytes, full_message).context("Decoding question labels")?;
+        let (remaining, name) =
+            Labels::from_bytes(&bytes, full_message).context("Decoding question labels")?;
 
         Ok((
             &remaining[4..],

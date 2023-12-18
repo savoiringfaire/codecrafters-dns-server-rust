@@ -1,16 +1,8 @@
-use std::net::UdpSocket;
 use dns_starter_rust::{
-    Packet,
-    Header,
-    Question,
-    Answer,
-    PacketType,
-    RecordType,
-    OperationCode,
-    ResponseCode,
-    ResponseData,
-    Z
+    Answer, Header, OperationCode, Packet, PacketType, Question, RecordType, ResponseCode,
+    ResponseData, Z,
 };
+use std::net::UdpSocket;
 
 fn main() -> anyhow::Result<()> {
     // Uncomment this block to pass the first stage
