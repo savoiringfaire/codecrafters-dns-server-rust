@@ -24,7 +24,7 @@ impl<'a> Packet<'a> {
 
         for _ in 0..header.question_count {
             let question: Question;
-            (remaining, question) = Question::from_bytes(&remaining)?;
+            (remaining, question) = Question::from_bytes(&remaining, bytes)?;
 
             questions.push(question)
         }
@@ -168,7 +168,7 @@ impl Header {
 struct Labels<'a>(Vec<&'a str>);
 
 impl<'a> Labels<'a> {
-    pub fn from_bytes(bytes: &'a [u8]) -> (&'a [u8], Self) {
+    pub fn from_bytes(bytes: &'a [u8], full_message: &'a [u8]) -> anyhow::Result<(&'a [u8], Self)> {
         let mut labels: Vec<&'a str> = Vec::new();
 
         let mut offset = 0;
@@ -177,16 +177,26 @@ impl<'a> Labels<'a> {
         //       Shouldn't fail on correct input. All bets are off on incorrect input.
         while bytes[offset] != 0 {
             let label_len = bytes[offset] as usize;
+            if label_len & 0xC0 == 0xC0 {
+                // This is a pointer
+                let pointer: usize = ((bytes[offset] as u16) & 0x3f << 8 | bytes[offset+1] as u16) as usize;
 
-            labels.push(
-                // TODO: Proper error handling here.
-                std::str::from_utf8(&bytes[offset + 1..offset + 1 + label_len]).unwrap(),
-            );
+                let (_, mut pointer_labels) = Self::from_bytes(&full_message[pointer..], &full_message).context("parsing pointer")?;
+                labels.append(&mut pointer_labels.0);
+                offset += 1;
 
-            offset += label_len + 1;
+                // A label must only *end* with a pointer.
+                break;
+            } else {
+                labels.push(
+                    // TODO: Proper error handling here.
+                    std::str::from_utf8(&bytes[offset + 1..offset + 1 + label_len]).context("Creating str from label")?,
+                );
+                offset += label_len + 1;
+            }
         }
 
-        (&bytes[offset + 1..], Self(labels))
+        Ok((&bytes[offset + 1..], Self(labels)))
     }
 
     pub fn encode(&self) -> anyhow::Result<Vec<u8>> {
@@ -224,8 +234,8 @@ struct Question<'a> {
 }
 
 impl<'a> Question<'a> {
-    pub fn from_bytes(bytes: &'a [u8]) -> anyhow::Result<(&'a [u8], Self)> {
-        let (remaining, name) = Labels::from_bytes(&bytes);
+    pub fn from_bytes(bytes: &'a [u8], full_message: &'a [u8]) -> anyhow::Result<(&'a [u8], Self)> {
+        let (remaining, name) = Labels::from_bytes(&bytes, full_message).context("Decoding question labels")?;
 
         Ok((
             &remaining[4..],
