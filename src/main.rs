@@ -1,8 +1,6 @@
-use std::net::UdpSocket;
-use anyhow::Context;
 use anyhow::anyhow;
-use nom::IResult;
-use nom::bytes::complete::take_till;
+use anyhow::Context;
+use std::net::UdpSocket;
 
 #[derive(Debug, Clone)]
 struct Packet<'a> {
@@ -14,7 +12,7 @@ struct Packet<'a> {
 
     questions: Vec<Question<'a>>,
 
-    answers: Vec<Answer<'a>>
+    answers: Vec<Answer<'a>>,
 }
 
 impl<'a> Packet<'a> {
@@ -31,10 +29,10 @@ impl<'a> Packet<'a> {
             questions.push(question)
         }
 
-        Ok(Self{
+        Ok(Self {
             header,
             questions,
-            answers: vec![]
+            answers: vec![],
         })
     }
 
@@ -51,11 +49,7 @@ impl<'a> Packet<'a> {
             answers.append(&mut answer.encode()?);
         }
 
-        Ok([
-            header,
-            questions,
-            answers
-        ].concat())
+        Ok([header, questions, answers].concat())
     }
 }
 
@@ -98,6 +92,7 @@ struct Header {
     recursion_available: bool,
 
     /// Reserved for future use, must always be zero.
+    #[allow(unused)]
     z: Z,
 
     /// Response code - this 4 bit field is set as part of responses.
@@ -113,26 +108,32 @@ struct Header {
     name_server_count: u16,
 
     /// The number of resource records in the additional records section
-    additional_records_count: u16
+    additional_records_count: u16,
 }
 
 impl Header {
     pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
         if bytes.len() != 12 {
-            return Err(anyhow!("Incorrect header byte length given: {}", bytes.len()))
+            return Err(anyhow!(
+                "Incorrect header byte length given: {}",
+                bytes.len()
+            ));
         }
 
         Ok(Self {
             // TODO: Proper handling of endianess here
             id: (bytes[0] as u16) << 8 | bytes[1] as u16,
-            packet_type: PacketType::try_from(bytes[2] & 0x80).context("Packet type to be valid")?,
-            opcode: OperationCode::try_from((bytes[2] & 0x78) >> 3).context("Opcode type to be valid")?,
+            packet_type: PacketType::try_from(bytes[2] & 0x80)
+                .context("Packet type to be valid")?,
+            opcode: OperationCode::try_from((bytes[2] & 0x78) >> 3)
+                .context("Opcode type to be valid")?,
             authoratitive_answer: bytes[2] & 0x04 != 0,
             truncation: bytes[2] & 0x02 != 0,
             recursion_desired: bytes[2] & 0x01 != 0,
             recursion_available: bytes[3] & 0x80 != 0,
             z: Z::Always,
-            response_code: ResponseCode::try_from(bytes[3] & 0x0F).context("Response code type to be valid")?,
+            response_code: ResponseCode::try_from(bytes[3] & 0x0F)
+                .context("Response code type to be valid")?,
             question_count: (bytes[4] as u16) << 8 | bytes[5] as u16,
             answer_count: (bytes[6] as u16) << 8 | bytes[7] as u16,
             name_server_count: (bytes[8] as u16) << 8 | bytes[9] as u16,
@@ -145,7 +146,11 @@ impl Header {
             // TODO: More efficient way than calling to_be_bytes twice?
             self.id.to_be_bytes()[0],
             self.id.to_be_bytes()[1],
-            (self.packet_type as u8) << 7 | (u8::from(self.opcode)) << 3 | (self.authoratitive_answer as u8) << 2 | (self.truncation as u8) << 1 | (self.recursion_desired as u8),
+            (self.packet_type as u8) << 7
+                | (u8::from(self.opcode)) << 3
+                | (self.authoratitive_answer as u8) << 2
+                | (self.truncation as u8) << 1
+                | (self.recursion_desired as u8),
             (self.recursion_available as u8) << 7 | 0 << 4 | (self.response_code as u8),
             self.question_count.to_be_bytes()[0],
             self.question_count.to_be_bytes()[1],
@@ -154,7 +159,7 @@ impl Header {
             self.name_server_count.to_be_bytes()[0],
             self.name_server_count.to_be_bytes()[1],
             self.additional_records_count.to_be_bytes()[0],
-            self.additional_records_count.to_be_bytes()[1]
+            self.additional_records_count.to_be_bytes()[1],
         ]
     }
 }
@@ -163,7 +168,7 @@ impl Header {
 struct Labels<'a>(Vec<&'a str>);
 
 impl<'a> Labels<'a> {
-    pub fn from_bytes(bytes: &'a[u8]) -> (&'a[u8], Self) {
+    pub fn from_bytes(bytes: &'a [u8]) -> (&'a [u8], Self) {
         let mut labels: Vec<&'a str> = Vec::new();
 
         let mut offset = 0;
@@ -175,13 +180,13 @@ impl<'a> Labels<'a> {
 
             labels.push(
                 // TODO: Proper error handling here.
-                std::str::from_utf8(&bytes[offset+1..offset+1+label_len]).unwrap()
+                std::str::from_utf8(&bytes[offset + 1..offset + 1 + label_len]).unwrap(),
             );
 
             offset += label_len + 1;
         }
 
-        (&bytes[offset+1..], Self(labels))
+        (&bytes[offset + 1..], Self(labels))
     }
 
     pub fn encode(&self) -> anyhow::Result<Vec<u8>> {
@@ -189,13 +194,14 @@ impl<'a> Labels<'a> {
 
         for label in &self.0 {
             if label.len() > u8::MAX as usize {
-                return Err(anyhow!("Name part `{}` longer than max `{}`", label, u8::MAX))
+                return Err(anyhow!(
+                    "Name part `{}` longer than max `{}`",
+                    label,
+                    u8::MAX
+                ));
             }
 
-            labels.append(&mut [
-                &[label.len() as u8],
-                label.as_bytes()
-            ].concat().to_vec())
+            labels.append(&mut [&[label.len() as u8], label.as_bytes()].concat().to_vec())
         }
 
         labels.push(0x00);
@@ -214,26 +220,31 @@ struct Question<'a> {
     record_type: RecordType,
 
     /// Rarely used, not implemented.
-    class: u16
+    class: u16,
 }
 
 impl<'a> Question<'a> {
-    pub fn from_bytes(bytes: &'a[u8]) -> anyhow::Result<(&'a[u8], Self)> {
+    pub fn from_bytes(bytes: &'a [u8]) -> anyhow::Result<(&'a [u8], Self)> {
         let (remaining, name) = Labels::from_bytes(&bytes);
 
-        Ok((&remaining[4..], Question{
-            name,
-            record_type: ((remaining[0] as u16) << 8 | remaining[1] as u16).try_into()?,
-            class: (remaining[2] as u16) << 8 | remaining[3] as u16
-        }))
+        Ok((
+            &remaining[4..],
+            Question {
+                name,
+                record_type: ((remaining[0] as u16) << 8 | remaining[1] as u16).try_into()?,
+                class: (remaining[2] as u16) << 8 | remaining[3] as u16,
+            },
+        ))
     }
 
     pub fn encode(&self) -> anyhow::Result<Vec<u8>> {
         Ok([
             self.name.encode()?,
             (self.record_type as u16).to_be_bytes().to_vec(),
-            self.class.to_be_bytes().to_vec()
-        ].concat().to_vec())
+            self.class.to_be_bytes().to_vec(),
+        ]
+        .concat()
+        .to_vec())
     }
 }
 
@@ -265,7 +276,7 @@ struct Answer<'a> {
     /// according to the TYPE and CLASS of the resource record.
     /// For example, the if the TYPE is A and the CLASS is IN,
     /// the RDATA field is a 4 octet ARPA Internet address.
-    rdata: ResponseData
+    rdata: ResponseData,
 }
 
 impl<'a> Answer<'a> {
@@ -277,19 +288,21 @@ impl<'a> Answer<'a> {
             self.ttl.to_be_bytes().to_vec(),
             self.rdlength.to_be_bytes().to_vec(),
             self.rdata.encode().to_vec(),
-        ].concat().to_vec())
+        ]
+        .concat()
+        .to_vec())
     }
 }
 
 #[derive(Clone, Debug)]
 enum ResponseData {
-    Ipv4([u8; 4])
+    Ipv4([u8; 4]),
 }
 
 impl ResponseData {
     pub fn encode(&self) -> &[u8] {
         match self {
-            Self::Ipv4(addr) => addr
+            Self::Ipv4(addr) => addr,
         }
     }
 }
@@ -341,7 +354,7 @@ enum RecordType {
 
     /// Mail Exchange
     MX = 15,
-    
+
     /// Text Strings
     TXT = 16,
 }
@@ -351,15 +364,15 @@ impl TryFrom<u16> for RecordType {
 
     fn try_from(from: u16) -> anyhow::Result<Self> {
         match from {
-            1 =>  Ok(RecordType::A),
-            2 =>  Ok(RecordType::NS),
-            3 =>  Ok(RecordType::MD),
-            4 =>  Ok(RecordType::MF),
-            5 =>  Ok(RecordType::CNAME),
-            6 =>  Ok(RecordType::SOA),
-            7 =>  Ok(RecordType::MB),
-            8 =>  Ok(RecordType::MG),
-            9 =>  Ok(RecordType::MR),
+            1 => Ok(RecordType::A),
+            2 => Ok(RecordType::NS),
+            3 => Ok(RecordType::MD),
+            4 => Ok(RecordType::MF),
+            5 => Ok(RecordType::CNAME),
+            6 => Ok(RecordType::SOA),
+            7 => Ok(RecordType::MB),
+            8 => Ok(RecordType::MG),
+            9 => Ok(RecordType::MR),
             10 => Ok(RecordType::NULL),
             11 => Ok(RecordType::WKS),
             12 => Ok(RecordType::PTR),
@@ -367,7 +380,7 @@ impl TryFrom<u16> for RecordType {
             14 => Ok(RecordType::MINFO),
             15 => Ok(RecordType::MX),
             16 => Ok(RecordType::TXT),
-            _ =>  Err(anyhow!("Invalid record type: {}", from))
+            _ => Err(anyhow!("Invalid record type: {}", from)),
         }
     }
 }
@@ -400,7 +413,7 @@ enum ResponseCode {
     /// information to the particular requester,
     /// or a name server may not wish to perform
     /// a particular operation (e.g., zone transfer) for particular data.
-    Refused = 5
+    Refused = 5,
 }
 
 impl TryFrom<u8> for ResponseCode {
@@ -414,20 +427,20 @@ impl TryFrom<u8> for ResponseCode {
             3 => Ok(ResponseCode::NameError),
             4 => Ok(ResponseCode::NotImplemented),
             5 => Ok(ResponseCode::Refused),
-            _ => Err(anyhow!("Invalid response code"))
+            _ => Err(anyhow!("Invalid response code")),
         }
     }
 }
 
 #[derive(Copy, Debug, Clone)]
 enum Z {
-    Always = 0
+    Always = 0,
 }
 
 #[derive(Copy, Debug, Clone)]
 enum PacketType {
     Query = 0,
-    Response = 1
+    Response = 1,
 }
 
 impl TryFrom<u8> for PacketType {
@@ -437,7 +450,7 @@ impl TryFrom<u8> for PacketType {
         match from {
             0 => Ok(PacketType::Query),
             1 => Ok(PacketType::Response),
-            _ => Err(anyhow!("Invalid packet type received"))
+            _ => Err(anyhow!("Invalid packet type received")),
         }
     }
 }
@@ -453,7 +466,7 @@ enum OperationCode {
     Status = 2,
 
     /// Internal invalid representation
-    Invalid(u8)
+    Invalid(u8),
 }
 
 impl From<OperationCode> for u8 {
@@ -475,7 +488,7 @@ impl TryFrom<u8> for OperationCode {
             0 => Ok(OperationCode::Query),
             1 => Ok(OperationCode::IQuery),
             2 => Ok(OperationCode::Status),
-            _ => Ok(OperationCode::Invalid(from))
+            _ => Ok(OperationCode::Invalid(from)),
         }
     }
 }
@@ -484,17 +497,16 @@ fn main() -> anyhow::Result<()> {
     // Uncomment this block to pass the first stage
     let udp_socket = UdpSocket::bind("127.0.0.1:2053").expect("Failed to bind to address");
     let mut buf = [0; 512];
-    
+
     loop {
         match udp_socket.recv_from(&mut buf) {
             Ok((size, source)) => {
                 let _received_data = String::from_utf8_lossy(&buf[0..size]);
 
                 let req = Packet::from_bytes(&buf)?;
-                dbg!(&req);
 
                 println!("Received {} bytes from {}", size, source);
-                let response = Packet{
+                let response = Packet {
                     header: Header {
                         id: req.header.id,
                         packet_type: PacketType::Response,
@@ -504,28 +516,34 @@ fn main() -> anyhow::Result<()> {
                         recursion_desired: req.header.recursion_desired,
                         recursion_available: false,
                         z: Z::Always,
-                        response_code: match req.header.opcode{
+                        response_code: match req.header.opcode {
                             OperationCode::Query => ResponseCode::Success,
-                            _ => ResponseCode::NotImplemented
+                            _ => ResponseCode::NotImplemented,
                         },
-                        question_count: 1,
-                        answer_count: 1,
+                        question_count: req.header.question_count,
+                        answer_count: req.header.question_count,
                         name_server_count: 0,
                         additional_records_count: 0,
                     },
                     questions: req.questions.clone(),
-                    answers: req.questions.clone().into_iter().map(|question| {
-                        Answer{
-                            name: question.name.clone(),
-                            answer_type: RecordType::A,
-                            class: 1,
-                            ttl: 60,
-                            // TODO: Encode properly
-                            rdlength: 4,
-                            rdata: ResponseData::Ipv4([0x08, 0x08, 0x08, 0x08])
-                        }
-                    }).collect()
-                }.encode()?;
+                    answers: req
+                        .questions
+                        .clone()
+                        .into_iter()
+                        .map(|question| {
+                            Answer {
+                                name: question.name.clone(),
+                                answer_type: RecordType::A,
+                                class: 1,
+                                ttl: 60,
+                                // TODO: Encode properly
+                                rdlength: 4,
+                                rdata: ResponseData::Ipv4([0x08, 0x08, 0x08, 0x08]),
+                            }
+                        })
+                        .collect(),
+                }
+                .encode()?;
 
                 udp_socket
                     .send_to(&response, source)
