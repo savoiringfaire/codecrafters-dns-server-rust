@@ -1,6 +1,8 @@
 use std::net::UdpSocket;
 use anyhow::Context;
 use anyhow::anyhow;
+use nom::IResult;
+use nom::bytes::complete::take_till;
 
 #[derive(Debug, Clone)]
 struct Packet<'a> {
@@ -16,10 +18,22 @@ struct Packet<'a> {
 }
 
 impl<'a> Packet<'a> {
-    pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
+    pub fn from_bytes(bytes: &'a [u8]) -> anyhow::Result<Self> {
+        let header = Header::from_bytes(&bytes[0..12]).context("decoding header")?;
+        let mut questions = Vec::with_capacity(header.question_count as usize);
+
+        let mut remaining = &bytes[12..];
+
+        for _ in 0..header.question_count {
+            let question: Question;
+            (remaining, question) = Question::from_bytes(&remaining)?;
+
+            questions.push(question)
+        }
+
         Ok(Self{
-            header: Header::from_bytes(&bytes[0..12]).context("decoding header")?,
-            questions: vec![],
+            header,
+            questions,
             answers: vec![]
         })
     }
@@ -149,6 +163,27 @@ impl Header {
 struct Labels<'a>(Vec<&'a str>);
 
 impl<'a> Labels<'a> {
+    pub fn from_bytes(bytes: &'a[u8]) -> (&'a[u8], Self) {
+        let mut labels: Vec<&'a str> = Vec::new();
+
+        let mut offset = 0;
+
+        // TODO: This is not bounds-checked properly.
+        //       Shouldn't fail on correct input. All bets are off on incorrect input.
+        while bytes[offset] != 0 {
+            let label_len = bytes[offset] as usize;
+
+            labels.push(
+                // TODO: Proper error handling here.
+                std::str::from_utf8(&bytes[offset+1..offset+1+label_len]).unwrap()
+            );
+
+            offset += label_len + 1;
+        }
+
+        (&bytes[offset+1..], Self(labels))
+    }
+
     pub fn encode(&self) -> anyhow::Result<Vec<u8>> {
         let mut labels: Vec<u8> = Vec::new();
 
@@ -183,6 +218,16 @@ struct Question<'a> {
 }
 
 impl<'a> Question<'a> {
+    pub fn from_bytes(bytes: &'a[u8]) -> anyhow::Result<(&'a[u8], Self)> {
+        let (remaining, name) = Labels::from_bytes(&bytes);
+
+        Ok((&remaining[4..], Question{
+            name,
+            record_type: ((remaining[0] as u16) << 8 | remaining[1] as u16).try_into()?,
+            class: (remaining[2] as u16) << 8 | remaining[3] as u16
+        }))
+    }
+
     pub fn encode(&self) -> anyhow::Result<Vec<u8>> {
         Ok([
             self.name.encode()?,
@@ -299,6 +344,32 @@ enum RecordType {
     
     /// Text Strings
     TXT = 16,
+}
+
+impl TryFrom<u16> for RecordType {
+    type Error = anyhow::Error;
+
+    fn try_from(from: u16) -> anyhow::Result<Self> {
+        match from {
+            1 =>  Ok(RecordType::A),
+            2 =>  Ok(RecordType::NS),
+            3 =>  Ok(RecordType::MD),
+            4 =>  Ok(RecordType::MF),
+            5 =>  Ok(RecordType::CNAME),
+            6 =>  Ok(RecordType::SOA),
+            7 =>  Ok(RecordType::MB),
+            8 =>  Ok(RecordType::MG),
+            9 =>  Ok(RecordType::MR),
+            10 => Ok(RecordType::NULL),
+            11 => Ok(RecordType::WKS),
+            12 => Ok(RecordType::PTR),
+            13 => Ok(RecordType::HINFO),
+            14 => Ok(RecordType::MINFO),
+            15 => Ok(RecordType::MX),
+            16 => Ok(RecordType::TXT),
+            _ =>  Err(anyhow!("Invalid record type: {}", from))
+        }
+    }
 }
 
 #[derive(Copy, Debug, Clone)]
@@ -420,6 +491,7 @@ fn main() -> anyhow::Result<()> {
                 let _received_data = String::from_utf8_lossy(&buf[0..size]);
 
                 let req = Packet::from_bytes(&buf)?;
+                dbg!(&req);
 
                 println!("Received {} bytes from {}", size, source);
                 let response = Packet{
@@ -441,16 +513,10 @@ fn main() -> anyhow::Result<()> {
                         name_server_count: 0,
                         additional_records_count: 0,
                     },
-                    questions: vec![
-                        Question{
-                            name: Labels(vec!["codecrafters", "io"]),
-                            class: 1,
-                            record_type: RecordType::A,
-                        }
-                    ],
-                    answers: vec![
+                    questions: req.questions.clone(),
+                    answers: req.questions.clone().into_iter().map(|question| {
                         Answer{
-                            name: Labels(vec!["codecrafters", "io"]),
+                            name: question.name.clone(),
                             answer_type: RecordType::A,
                             class: 1,
                             ttl: 60,
@@ -458,7 +524,7 @@ fn main() -> anyhow::Result<()> {
                             rdlength: 4,
                             rdata: ResponseData::Ipv4([0x08, 0x08, 0x08, 0x08])
                         }
-                    ]
+                    }).collect()
                 }.encode()?;
 
                 udp_socket
