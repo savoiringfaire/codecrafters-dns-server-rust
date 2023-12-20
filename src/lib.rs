@@ -2,37 +2,117 @@ use anyhow::anyhow;
 use anyhow::Context;
 
 #[derive(Debug, Clone)]
-pub struct Packet<'a> {
+pub struct Packet {
     /// The header section is always present.  The header includes fields that
     /// specify which of the remaining sections are present, and also specify
     /// whether the message is a query or a response, a standard query or some
     /// other opcode, etc.
     pub header: Header,
 
-    pub questions: Vec<Question<'a>>,
+    pub questions: Vec<Question>,
 
-    pub answers: Vec<Answer<'a>>,
+    pub answers: Vec<Answer>,
 }
 
-impl<'a> Packet<'a> {
-    pub fn from_bytes(bytes: &'a [u8]) -> anyhow::Result<Self> {
-        let header = Header::from_bytes(&bytes[0..12]).context("decoding header")?;
-        let mut questions = Vec::with_capacity(header.question_count as usize);
+impl TryFrom<&[u8]> for Packet {
+    type Error = anyhow::Error;
 
-        let mut remaining = &bytes[12..];
+    fn try_from(from: &[u8]) -> anyhow::Result<Packet> {
+        let header = Header::from_bytes(&from[0..12]).context("decoding header")?;
+        let mut questions = Vec::with_capacity(header.question_count as usize);
+        let mut answers = Vec::with_capacity(header.answer_count as usize);
+
+        let mut remaining = &from.as_ref()[12..];
 
         for _ in 0..header.question_count {
             let question: Question;
-            (remaining, question) = Question::from_bytes(&remaining, bytes)?;
+            (remaining, question) = Question::from_bytes(&remaining, &from)?;
 
             questions.push(question)
+        }
+
+        for _ in 0..header.answer_count {
+            let answer: Answer;
+            (remaining, answer) = Answer::from_bytes(&remaining, &from)?;
+
+            answers.push(answer);
         }
 
         Ok(Self {
             header,
             questions,
-            answers: vec![],
+            answers,
         })
+    }
+}
+
+impl<'a> Packet {
+    #[inline]
+    pub fn new(id: u16, packet_type: PacketType, response_code: ResponseCode) -> Self {
+        Self {
+            header: Header {
+                id,
+                packet_type,
+                response_code,
+                opcode: OperationCode::Query,
+                truncation: false,
+                authoratitive_answer: false,
+                recursion_desired: false,
+                recursion_available: false,
+                z: Z::Always,
+                question_count: 0,
+                answer_count: 0,
+                name_server_count: 0,
+                additional_records_count: 0,
+            },
+            questions: vec![],
+            answers: vec![],
+        }
+    }
+
+    #[inline]
+    pub fn with_answers(mut self, answers: &mut Vec<Answer>) -> Self {
+        self.header.answer_count += answers.len() as u16;
+        self.answers.append(answers);
+        self
+    }
+
+    #[inline]
+    pub fn with_answer(mut self, answer: Answer) -> Self {
+        self.answers.push(answer);
+        self.header.answer_count += 1;
+        self
+    }
+
+    #[inline]
+    pub fn with_questions(mut self, questions: &mut Vec<Question>) -> Self {
+        self.header.question_count += questions.len() as u16;
+        self.questions.append(questions);
+        self
+    }
+
+    #[inline]
+    pub fn with_question(mut self, question: Question) -> Self {
+        self.questions.push(question);
+        self.header.question_count += 1;
+        self
+    }
+
+    #[inline]
+    pub fn with_opcode(mut self, opcode: OperationCode) -> Self {
+        self.header.opcode = opcode;
+        self
+    }
+
+    #[inline]
+    pub fn with_recursion_desired(mut self, desired: bool) -> Self {
+        self.header.recursion_desired = desired;
+        self
+    }
+
+    #[inline]
+    pub fn recursion_desired(&self) -> bool {
+        self.header.recursion_desired
     }
 
     pub fn encode(&self) -> anyhow::Result<Vec<u8>> {
@@ -122,7 +202,7 @@ impl Header {
         Ok(Self {
             // TODO: Proper handling of endianess here
             id: (bytes[0] as u16) << 8 | bytes[1] as u16,
-            packet_type: PacketType::try_from(bytes[2] & 0x80)
+            packet_type: PacketType::try_from((bytes[2] & 0x80) >> 7)
                 .context("Packet type to be valid")?,
             opcode: OperationCode::try_from((bytes[2] & 0x78) >> 3)
                 .context("Opcode type to be valid")?,
@@ -164,11 +244,11 @@ impl Header {
 }
 
 #[derive(Debug, Clone)]
-pub struct Labels<'a>(Vec<&'a str>);
+pub struct Labels(Vec<String>);
 
-impl<'a> Labels<'a> {
+impl<'a> Labels {
     pub fn from_bytes(bytes: &'a [u8], full_message: &'a [u8]) -> anyhow::Result<(&'a [u8], Self)> {
-        let mut labels: Vec<&'a str> = Vec::new();
+        let mut labels: Vec<String> = Vec::new();
 
         let mut offset = 0;
 
@@ -192,7 +272,7 @@ impl<'a> Labels<'a> {
             } else {
                 labels.push(
                     // TODO: Proper error handling here.
-                    std::str::from_utf8(&bytes[offset + 1..offset + 1 + label_len])
+                    String::from_utf8(bytes[offset + 1..offset + 1 + label_len].to_vec())
                         .context("Creating str from label")?,
                 );
                 offset += label_len + 1;
@@ -224,10 +304,10 @@ impl<'a> Labels<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Question<'a> {
+pub struct Question {
     /// A domain name, represented as a sequence of "labels"
     /// each label represents a part of the domain (e.g. 'google', 'com')
-    pub name: Labels<'a>,
+    pub name: Labels,
 
     /// the type of record
     pub record_type: RecordType,
@@ -236,7 +316,7 @@ pub struct Question<'a> {
     pub class: u16,
 }
 
-impl<'a> Question<'a> {
+impl<'a> Question {
     pub fn from_bytes(bytes: &'a [u8], full_message: &'a [u8]) -> anyhow::Result<(&'a [u8], Self)> {
         let (remaining, name) =
             Labels::from_bytes(&bytes, full_message).context("Decoding question labels")?;
@@ -263,9 +343,9 @@ impl<'a> Question<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Answer<'a> {
+pub struct Answer {
     /// a domain name to which this resource record pertains.
-    pub name: Labels<'a>,
+    pub name: Labels,
 
     /// two octets containing one of the RR type codes.  This
     /// field specifies the meaning of the data in the RDATA
@@ -293,7 +373,32 @@ pub struct Answer<'a> {
     pub rdata: ResponseData,
 }
 
-impl<'a> Answer<'a> {
+impl<'a> Answer {
+    pub fn from_bytes(bytes: &'a [u8], full_message: &'a [u8]) -> anyhow::Result<(&'a [u8], Self)> {
+        let (remaining, name) =
+            Labels::from_bytes(&bytes, full_message).context("Decoding question labels")?;
+
+        Ok((
+            &remaining[4..],
+            Answer {
+                name,
+                answer_type: ((remaining[0] as u16) << 8 | remaining[1] as u16).try_into()?,
+                class: (remaining[2] as u16) << 8 | remaining[3] as u16,
+                ttl: (remaining[4] as u32) << 24
+                    | (remaining[5] as u32) << 16
+                    | (remaining[6] as u32) << 8
+                    | remaining[7] as u32,
+                rdlength: (remaining[8] as u16) << 8 | remaining[9] as u16,
+                rdata: ResponseData::Ipv4([
+                    remaining[10],
+                    remaining[11],
+                    remaining[12],
+                    remaining[13],
+                ]),
+            },
+        ))
+    }
+
     pub fn encode(&self) -> anyhow::Result<Vec<u8>> {
         Ok([
             self.name.encode()?,
@@ -464,7 +569,7 @@ impl TryFrom<u8> for PacketType {
         match from {
             0 => Ok(PacketType::Query),
             1 => Ok(PacketType::Response),
-            _ => Err(anyhow!("Invalid packet type received")),
+            _ => Err(anyhow!("Invalid packet type received: {}", from)),
         }
     }
 }
