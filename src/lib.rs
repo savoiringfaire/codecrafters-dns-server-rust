@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use anyhow::Context;
-use byteorder::{NetworkEndian, ByteOrder};
+use byteorder::{ByteOrder, NetworkEndian};
 
 #[derive(Debug, Clone)]
 pub struct Packet {
@@ -258,7 +258,8 @@ impl<'a> Labels {
             let label_len = bytes[offset] as usize;
             if label_len & 0xC0 == 0xC0 {
                 // This is a pointer
-                let pointer: usize = NetworkEndian::read_u16(&[bytes[offset] & 0x3f, bytes[offset + 1]]) as usize;
+                let pointer: usize =
+                    NetworkEndian::read_u16(&[bytes[offset] & 0x3f, bytes[offset + 1]]) as usize;
 
                 let (_, mut pointer_labels) =
                     Self::from_bytes(&full_message[pointer..], &full_message)
@@ -383,7 +384,12 @@ impl<'a> Answer {
                 name,
                 answer_type: NetworkEndian::read_u16(&[remaining[0], remaining[1]]).try_into()?,
                 class: NetworkEndian::read_u16(&[remaining[2], remaining[3]]),
-                ttl: NetworkEndian::read_u32(&[remaining[4], remaining[5], remaining[6], remaining[7]]),
+                ttl: NetworkEndian::read_u32(&[
+                    remaining[4],
+                    remaining[5],
+                    remaining[6],
+                    remaining[7],
+                ]),
                 rdlength: NetworkEndian::read_u16(&[remaining[8], remaining[9]]),
                 rdata: ResponseData::Ipv4([
                     remaining[10],
