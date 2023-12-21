@@ -21,7 +21,6 @@ fn main() -> anyhow::Result<()> {
         upstream = args[2].as_str();
     }
 
-    // Uncomment this block to pass the first stage
     let udp_socket = UdpSocket::bind("0.0.0.0:2053").context("Failed to bind to address")?;
     let upstream: SocketAddr = upstream.parse()?;
     let mut buf = [0; 512];

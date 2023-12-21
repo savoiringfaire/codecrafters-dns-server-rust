@@ -1,5 +1,6 @@
 use anyhow::anyhow;
 use anyhow::Context;
+use byteorder::{NetworkEndian, ByteOrder};
 
 #[derive(Debug, Clone)]
 pub struct Packet {
@@ -200,8 +201,7 @@ impl Header {
         }
 
         Ok(Self {
-            // TODO: Proper handling of endianess here
-            id: (bytes[0] as u16) << 8 | bytes[1] as u16,
+            id: NetworkEndian::read_u16(&[bytes[0], bytes[1]]),
             packet_type: PacketType::try_from((bytes[2] & 0x80) >> 7)
                 .context("Packet type to be valid")?,
             opcode: OperationCode::try_from((bytes[2] & 0x78) >> 3)
@@ -213,10 +213,10 @@ impl Header {
             z: Z::Always,
             response_code: ResponseCode::try_from(bytes[3] & 0x0F)
                 .context("Response code type to be valid")?,
-            question_count: (bytes[4] as u16) << 8 | bytes[5] as u16,
-            answer_count: (bytes[6] as u16) << 8 | bytes[7] as u16,
-            name_server_count: (bytes[8] as u16) << 8 | bytes[9] as u16,
-            additional_records_count: (bytes[10] as u16) << 8 | bytes[11] as u16,
+            question_count: NetworkEndian::read_u16(&[bytes[4], bytes[5]]),
+            answer_count: NetworkEndian::read_u16(&[bytes[6], bytes[7]]),
+            name_server_count: NetworkEndian::read_u16(&[bytes[8], bytes[9]]),
+            additional_records_count: NetworkEndian::read_u16(&[bytes[10], bytes[11]]),
         })
     }
 
@@ -258,8 +258,7 @@ impl<'a> Labels {
             let label_len = bytes[offset] as usize;
             if label_len & 0xC0 == 0xC0 {
                 // This is a pointer
-                let pointer: usize =
-                    ((bytes[offset] as u16) & 0x3f << 8 | bytes[offset + 1] as u16) as usize;
+                let pointer: usize = NetworkEndian::read_u16(&[bytes[offset] & 0x3f, bytes[offset + 1]]) as usize;
 
                 let (_, mut pointer_labels) =
                     Self::from_bytes(&full_message[pointer..], &full_message)
@@ -325,8 +324,8 @@ impl<'a> Question {
             &remaining[4..],
             Question {
                 name,
-                record_type: ((remaining[0] as u16) << 8 | remaining[1] as u16).try_into()?,
-                class: (remaining[2] as u16) << 8 | remaining[3] as u16,
+                record_type: NetworkEndian::read_u16(&[remaining[0], remaining[1]]).try_into()?,
+                class: NetworkEndian::read_u16(&[remaining[2], remaining[3]]),
             },
         ))
     }
@@ -382,13 +381,10 @@ impl<'a> Answer {
             &remaining[4..],
             Answer {
                 name,
-                answer_type: ((remaining[0] as u16) << 8 | remaining[1] as u16).try_into()?,
-                class: (remaining[2] as u16) << 8 | remaining[3] as u16,
-                ttl: (remaining[4] as u32) << 24
-                    | (remaining[5] as u32) << 16
-                    | (remaining[6] as u32) << 8
-                    | remaining[7] as u32,
-                rdlength: (remaining[8] as u16) << 8 | remaining[9] as u16,
+                answer_type: NetworkEndian::read_u16(&[remaining[0], remaining[1]]).try_into()?,
+                class: NetworkEndian::read_u16(&[remaining[2], remaining[3]]),
+                ttl: NetworkEndian::read_u32(&[remaining[4], remaining[5], remaining[6], remaining[7]]),
+                rdlength: NetworkEndian::read_u16(&[remaining[8], remaining[9]]),
                 rdata: ResponseData::Ipv4([
                     remaining[10],
                     remaining[11],
